@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GitHub Repo & Upload Tool</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Noto Sans Bengali",sans-serif;color:#172033;background:#f4f7fb}
+*{box-sizing:border-box}body{margin:0;padding:18px}.wrap{max-width:850px;margin:auto}
+h1{font-size:1.55rem;margin:0 0 8px}.sub{color:#536174;margin:0 0 18px}
+.card{background:white;border:1px solid #dbe3ee;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 4px 16px #12213a0a}
+label{display:block;font-weight:650;margin:12px 0 6px}
+input[type=text],input[type=password],textarea,select{width:100%;padding:11px;border:1px solid #bac7d8;border-radius:10px;font:inherit;background:#fff}
+input[type=file]{width:100%;padding:10px;border:1px dashed #9aabc1;border-radius:10px;background:#f9fbff}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.checks{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px}.checks label{font-weight:500;margin:0}
+button{border:0;border-radius:11px;padding:12px 15px;font:inherit;font-weight:700;cursor:pointer;background:#1264d8;color:#fff;width:100%;margin-top:12px}
+button.secondary{background:#e8eef7;color:#172033}button:disabled{opacity:.55;cursor:wait}
+.note{font-size:.92rem;color:#536174;line-height:1.55}.warn{background:#fff7e6;border:1px solid #f0d18b;padding:12px;border-radius:10px;color:#62450b;line-height:1.5}
+.status{white-space:pre-wrap;overflow-wrap:anywhere;background:#101827;color:#e4edf9;border-radius:12px;padding:12px;min-height:72px;font: .9rem ui-monospace,monospace}
+#fileSummary{font-size:.92rem;color:#334155;margin-top:8px}
+@media(max-width:600px){body{padding:10px}.row{grid-template-columns:1fr}.card{padding:13px}h1{font-size:1.3rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>GitHub Repo ও Bulk Upload Tool</h1>
+<p class="sub">মোবাইল থেকে repository তৈরি করে ZIP, folder বা একাধিক file একসাথে upload করুন।</p>
+
+<div class="warn"><b>নিরাপত্তা:</b> GitHub token কাউকে দেবেন না </div>
+
+<div class="card">
+<h2>১) GitHub সংযোগ</h2>
+<label for="token">Personal Access Token</label>
+<input id="token" type="password" autocomplete="off" placeholder="ghp_... বা github_pat_..." />
+<p class="note">Classic token ব্যবহার করলে repository তৈরি/আপলোডের জন্য সাধারণত <b>repo</b> scope দরকার। Fine-grained token-এ target repository-র <b>Contents: Read and write</b> এবং repository তৈরি করার উপযুক্ত permission লাগতে পারে। যত কম permission সম্ভব দিন।</p>
+<label for="repo">Repository name</label><input id="repo" type="text" placeholder="my-project" autocapitalize="none">
+<p class="note">Owner/username Token থেকে স্বয়ংক্রিয়ভাবে শনাক্ত হবে; আলাদা করে লিখতে হবে না।
+<label for="description">Description (ঐচ্ছিক)</label><input id="description" type="text" placeholder="My Android app source code">
+<div class="checks">
+<label><input id="private" type="checkbox" checked> Private repository</label>
+<label><input id="create" type="checkbox" checked> Repository না থাকলে তৈরি করব</label>
+</div>
+<label for="branch">Branch</label><input id="branch" type="text" value="main">
+<p class="note">নতুন repository তৈরি করার সময় README দিয়ে initialize করা হয়, যাতে main branch তৈরি থাকে। আগে থেকে থাকা repository-তেও upload করা যাবে।</p>
+</div>
+
+<div class="card">
+<h2>২) ফাইল বেছে নিন</h2>
+<label for="files">একাধিক file নির্বাচন</label><input id="files" type="file" multiple>
+<label for="folder">সম্পূর্ণ folder নির্বাচন</label><input id="folder" type="file" webkitdirectory directory multiple>
+<label for="zip">ZIP file নির্বাচন</label><input id="zip" type="file" accept=".zip,application/zip">
+<div id="fileSummary">এখনো কোনো file নির্বাচন করা হয়নি। একাধিক input থেকেও file যোগ করা যাবে।</div>
+<p class="note">Folder input সব ব্রাউজারে সমানভাবে কাজ নাও করতে পারে। ZIP ফাইলের ভেতরের folder structure রাখা হবে। একই path একাধিকবার থাকলে শেষের file-টি ব্যবহার হবে।</p>
+<button id="uploadBtn">Repository তৈরি / ফাইলে Upload</button>
+<button id="clearBtn" class="secondary" type="button">নির্বাচিত ফাইল মুছুন</button>
+</div>
+
+<div class="card">
+<h2>অবস্থা</h2>
+<div id="status" class="status">প্রস্তুত।</div>
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ const status = $('status');
+ let chosen = new Map();
+ const say = s => { status.textContent += '\n' + s; status.scrollTop = status.scrollHeight; };
+ const resetStatus = s => { status.textContent = s; };
+ const cleanPath = p => p.replace(/\\/g,'/').replace(/^\/+/,'').split('/').filter(x => x && x !== '.' && x !== '..').join('/');
+ function addFile(file, path) {
+   path = cleanPath(path || file.name);
+   if (!path || path.endsWith('/')) return;
+   chosen.set(path, file);
+ }
+ function addInputFiles(input, isFolder=false) {
+   for (const f of input.files) {
+     let p = f.webkitRelativePath || f.name;
+     if (isFolder && p.includes('/')) p = p.substring(p.indexOf('/')+1);
+     addFile(f,p);
+   }
+   updateSummary();
+ }
+ function updateSummary() {
+   const total = [...chosen.values()].reduce((n,f)=>n+f.size,0);
+   $('fileSummary').textContent = `${chosen.size}টি file নির্বাচিত • মোট ${formatBytes(total)}\n` +
+      [...chosen.keys()].slice(0,8).join(', ') + (chosen.size>8 ? ` … আরও ${chosen.size-8}টি` : '');
+ }
+ function formatBytes(n) { if(n<1024)return n+' B'; if(n<1048576)return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(2)+' MB'; }
+ $('files').addEventListener('change', e=>addInputFiles(e.target));
+ $('folder').addEventListener('change', e=>addInputFiles(e.target,true));
+ $('zip').addEventListener('change', async e=>{
+   const f=e.target.files[0]; if(!f)return;
+   const unzip = confirm(`"${f.name}" ZIP ফাইলটি extract (unzip) করে ভেতরের ফাইলগুলো upload করবেন?\n\nOK = unzip করে ভেতরের ফাইল upload\nCancel = ZIP ফাইলটি যেমন আছে তেমন upload`);
+   try {
+     if (!unzip) {
+       addFile(f, f.name);
+       updateSummary();
+       resetStatus(`ZIP-টি extract করা হয়নি। ZIP ফাইল হিসেবে যোগ করা হয়েছে: ${f.name}`);
+       return;
+     }
+     if (typeof JSZip === 'undefined') throw new Error('ZIP লাইব্রেরি লোড হয়নি। ইন্টারনেট সংযোগ পরীক্ষা করুন।');
+     resetStatus('ZIP পড়া হচ্ছে…');
+     const z=await JSZip.loadAsync(f);
+     let count=0;
+     for(const [p,item] of Object.entries(z.files)) {
+       if(item.dir) continue;
+       const blob=await item.async('blob');
+       addFile(new File([blob], p.split('/').pop() || 'file'), p);
+       count++;
+     }
+     updateSummary(); say(`ZIP extract করে ${count}টি file যোগ হয়েছে।`);
+   } catch(err) { say('ZIP পড়া যায়নি: '+err.message); }
+ });
+ $('clearBtn').addEventListener('click',()=>{
+   chosen.clear(); $('files').value=''; $('folder').value=''; $('zip').value=''; updateSummary(); resetStatus('ফাইল নির্বাচন মুছে ফেলা হয়েছে।');
+ });
+ async function api(path, options={}) {
+   const token=$('token').value.trim();
+   const response=await fetch('https://api.github.com'+path,{
+     ...options,
+     headers:{'Accept':'application/vnd.github+json','Authorization':'Bearer '+token,'X-GitHub-Api-Version':'2022-11-28',...(options.headers||{})}
+   });
+   const txt=await response.text(); let data={};
+   try { data=txt?JSON.parse(txt):{}; } catch {}
+   if(!response.ok) throw new Error((data.message||response.statusText)+' (HTTP '+response.status+')');
+   return data;
+ }
+ function b64FromBytes(bytes) {
+   let binary=''; const chunk=0x8000;
+   for(let i=0;i<bytes.length;i+=chunk) binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+chunk,bytes.length)));
+   return btoa(binary);
+ }
+ async function ensureRepo(owner,repo) {
+   try {
+     const info=await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+     say(`Repository পাওয়া গেছে: ${info.full_name}`);
+     return info;
+   } catch(e) {
+     if (!e.message.includes('HTTP 404') || !$('create').checked) throw e;
+     say('Repository নেই—নতুন repository তৈরি হচ্ছে…');
+     const info=await api('/user/repos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+       name:repo,description:$('description').value.trim(),private:$('private').checked,auto_init:true
+     })});
+     say(`Repository তৈরি হয়েছে: ${info.full_name}`);
+     await new Promise(r=>setTimeout(r,1200));
+     return info;
+   }
+ }
+ async function uploadAll() {
+   const token=$('token').value.trim(), repo=$('repo').value.trim();
+   const branch=$('branch').value.trim() || 'main';
+   if(!token || !repo) throw new Error('Token এবং Repository name পূরণ করুন।');
+   const me = await api('/user');
+   const owner = me.login;
+   say(`GitHub account: ${owner}`);
+   if(!/^[A-Za-z0-9._-]+$/.test(repo) || repo==='.' || repo==='..') throw new Error('Repository name সঠিক নয়।');
+   if(!chosen.size) throw new Error('আগে অন্তত একটি file বা ZIP/folder নির্বাচন করুন।');
+   const files=[...chosen.entries()];
+   const total=files.reduce((n,[p,f])=>n+f.size,0);
+   if(files.some(([p,f])=>!p || p.split('/').some(s=>s==='..'))) throw new Error('কোনো file path সঠিক নয়।');
+   if(files.some(([p,f])=>f.size>100*1024*1024)) throw new Error('একটি file 100 MB-এর বেশি। GitHub Git database API দিয়ে এমন file upload করা যাবে না।');
+   if(total>350*1024*1024) throw new Error('মোট file size 350 MB-এর বেশি; ছোট batch-এ upload করুন।');
+   const info=await ensureRepo(owner,repo);
+   const fullOwner=info.owner.login;
+   const branchName=branch;
+   let ref;
+   try { ref=await api(`/repos/${fullOwner}/${repo}/git/ref/heads/${encodeURIComponent(branchName)}`); }
+   catch(e) { throw new Error(`Branch "${branchName}" পাওয়া যায়নি। Branch name ঠিক করুন। `+e.message); }
+   const parentSha=ref.object.sha;
+   const parentCommit=await api(`/repos/${fullOwner}/${repo}/git/commits/${parentSha}`);
+   const treeItems=[];
+   let i=0;
+   for(const [path,file] of files) {
+     i++; say(`(${i}/${files.length}) File প্রস্তুত: ${path}`);
+     const bytes=new Uint8Array(await file.arrayBuffer());
+     const blob=await api(`/repos/${fullOwner}/${repo}/git/blobs`,{
+       method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({content:b64FromBytes(bytes),encoding:'base64'})
+     });
+     treeItems.push({path,mode:'100644',type:'blob',sha:blob.sha});
+   }
+   say('Git tree তৈরি হচ্ছে…');
+   const tree=await api(`/repos/${fullOwner}/${repo}/git/trees`,{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({base_tree:parentCommit.tree.sha,tree:treeItems})
+   });
+   say('Commit তৈরি হচ্ছে…');
+   const commit=await api(`/repos/${fullOwner}/${repo}/git/commits`,{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({message:`Upload ${files.length} file(s) from mobile uploader`,tree:tree.sha,parents:[parentSha]})
+   });
+   say('Branch update হচ্ছে…');
+   await api(`/repos/${fullOwner}/${repo}/git/refs/heads/${encodeURIComponent(branchName)}`,{
+     method:'PATCH',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({sha:commit.sha,force:false})
+   });
+   say(`সফল! ${files.length}টি file upload হয়েছে।`);
+   say(`Repository: https://github.com/${fullOwner}/${repo}`);
+   say(`Commit: ${commit.sha}`);
+ }
+ $('uploadBtn').addEventListener('click', async ()=>{
+   $('uploadBtn').disabled=true; resetStatus('কাজ শুরু হচ্ছে…');
+   try { await uploadAll(); }
+   catch(e) { say('ERROR: '+e.message); say('সমস্যা হলে token permission, branch name, internet এবং file size পরীক্ষা করুন।'); }
+   finally { $('uploadBtn').disabled=false; }
+ });
+})();
+</script>
+</body>
+  </html>
